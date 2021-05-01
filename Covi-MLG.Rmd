@@ -1,0 +1,875 @@
+---
+title: "Prova 2 parte 2 MLG"
+author: "Douglas"
+documentclass: article
+header-includes:
+- \usepackage[T1]{fontenc}
+- \usepackage[utf8]{inputenc}
+- \usepackage {amsmath}
+- \usepackage{setspace}\singlespacing
+- \usepackage[brazil]{babel}
+output:
+  html_document:
+    df_print: paged
+    fontsize: 12pt
+  pdf_document: default
+  word_document: default
+geometry: margin=1in
+classoption: a4paper
+---
+
+\newcommand{\ld}{\vspace{.01cm}}
+
+\newpage
+
+\pagenumbering{arabic}
+
+
+\newpage
+# 1. Introdução
+
+Dadas as informações sobre a base disponíveis no Kaggle,o nosso interesse é utilizar a regressão binária para modelar $E(Y|x)$ e estimar os coeficientes de regressão \textbf{$\beta$} considerando a correspondente função de ligação.
+
+Em regressão binária, $E(Y_i|x_i)= \sum_{y=0}^1 P(Y_i=y_i)y_i = 1 P(Y=1)+0P(Y=0) = p_i \in (0,1)$. Então, temos interesse em estimar $\widehat{P(y=1)}$, em que y=1 significa que o paciente é positivo para covid.
+
+
+Antes de propor um modelo de regressão, vamos fazer a leitura dos dados e desenvolver uma análise descritiva.
+
+Depois disso, vamos propor modelos de regressão binária utilizando as funções de ligação logito, probito, cauchito, cloglog e loglog.
+
+Escolheremos um desses modelos usando diferentes critérios como AIC, resíduos e curva ROC.
+
+Depois de escolhido o modelo, vamos analisar a seleção de variáveis escolhendo as variáveis que forem significativas para o modelo.
+
+Em seguida, considerando  o modelo reduzido, vamos fazer uma análise diagnóstica para identificar pontos problemáticos, propor um modelo final e interpretar os parâmetros do modelo.
+
+Por fim, vamos analisar o modelo final no conjunto de teste e concluir.
+
+#Pacotes utilizados na análise.
+
+```{r}
+library(Epi)
+library(hnp)
+library(MASS)
+library(naniar)#Substituir valores por NA
+library(ggplot2)
+```
+
+# 2. Descrição dos dados
+
+## Leitura dos dados
+
+```{r}
+rm(list=ls(all.names=TRUE)) #Limpando os dados do R
+
+dados <- read.csv("c:/users/dougl/Desktop/Prova MLG/covid.csv", header = T, sep = ",", dec = ".")
+
+#Excluindo colunas que não afetarão a análise 
+
+dados <- dados[,-c(1,4,5,6)]#Coluna de ID e colunas de datas.
+
+head(dados)
+
+```
+
+## Tratando a base e excluindo valores faltantes
+
+```{r}
+#Primeiro eu substituo todos os valores de 'pregnancy' cujo valor de 'sex' é 2(homem) por 2(negativo para gravidez)
+dados$pregnancy[dados$sex==2] <- 2
+
+
+#Agora substituo cada valor não especificado por NA.
+dados <- replace_with_na(dados,replace = list(pregnancy = c(99, 98, 97),
+                                              intubed = c(99, 98, 97) ,
+                                              pneumonia = c(99, 98, 97) ,
+                                              diabetes = c(99, 98, 97) ,
+                                              copd = c(99, 98, 97) ,
+                                              asthma = c(99, 98, 97),
+                                              inmsupr = c(99, 98, 97) ,
+                                              hypertension  = c(99, 98, 97) ,
+                                              other_disease = c(99, 98, 97) ,
+                                              cardiovascular = c(99, 98, 97) ,
+                                              obesity= c(99, 98, 97) ,
+                                              renal_chronic = c(99, 98, 97) ,
+                                              tobacco = c(99, 98, 97) ,
+                                              contact_other_covid = c(99, 98, 97),
+                                              covid_res = c(99, 98, 97) ,
+                                              icu = c(99, 98, 97)))
+
+
+#Substituindo pacientes esperando pelo resultado por NA e mudando o valor de negativo para covid por 0.
+dados$covid_res[dados$covid_res == 3] <- NA
+
+dados$covid_res[dados$covid_res == 2] <- 0
+
+#Excluindo todos os valores que possuem NA
+dados <- na.omit(dados)
+
+#Checando se há valores vazios no dataset
+na_count <- sapply(dados , function(y) sum(length(which(is.na(y)))))
+na_count <- data.frame(na_count)
+na_count
+```
+
+Amostrando 2000 observações para utilizar na análise
+
+```{r}
+#Passando colunas para fator
+names <- names(dados)[-5]
+dados[,names] <- lapply (dados[, names], factor)
+```
+
+# a)Usando seu código USP tome uma amostra de tamanho 2000 para desenvolver sua análise salve esta base com o nome baseprincipal.csv.
+```{r}
+set.seed(10883512)
+#Amostra de 2000 valores que será utilizada para a análise.
+baseprincipal <- dados[sample(1:nrow(dados), 2000),]
+
+
+
+write.csv(baseprincipal,"c:/users/dougl/Desktop/Prova MLG/baseprincipal.csv", row.names = FALSE)
+
+table(baseprincipal$covid_res)
+
+```
+- Tipos de dados 
+
+```{r}
+dados <- baseprincipal 
+str(dados)
+```
+- Nomes das variáveis
+
+```{r}
+names(dados)
+```
+Como apenas possuíamos informações completas (sem NA) sobre pacientes que foram hospitalizados, ao remover os valores faltantes, ficamos apenas com um tipo de paciente na coluna 'patient_type', por isso, vamos excluir essa coluna pois ela não possui variabilidade alguma.
+
+```{r}
+dados['patient_type'] <- NULL
+```
+
+
+# 3. Análise descritiva das variáveis do modelo
+
+A partir da função summary do R, podemos ter informações sobre mínimo, máximo, média, mediana e quantis da variável resposta e das variáveis explicativas presentes na nossa amostra.
+
+```{r}
+summary(dados)
+```
+## Análise da variável resposta.
+
+- Quantidade de pessoas com positivas para o corona vírus.
+```{r}
+(sum(dados$covid_res == 1))
+
+#proporção
+sum(dados$covid_res == 1)/ nrow(dados)
+
+
+plot(dados$covid_res,xlab ='Resultado Covid', ylab = 'Contagem', col = 'steelblue')
+```
+
+
+Portanto, na nossa amostra, há 12707 pessoass classificadas como que possuiram o vírus, o que corresponde a uma proporção de 0.635.
+
+
+
+
+
+## Gráficos de cada variável explicativa considerando a variável resposta.
+
+- Gráfico de barras de 'sex' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = sex)) + 
+  geom_bar(position = "stack")
+
+```
+
+
+Percebemos pelo gráfico que aparentemente a proporção de homens e mulheres é igual para ambas as classes.
+
+
+
+- Gráfico de barras de 'intubed' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = intubed)) + 
+  geom_bar(position = "stack")
+
+```
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes intubados é igual para ambas as classes.
+
+
+- Gráfico de barras de 'pneumonia' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = pneumonia)) + 
+  geom_bar(position = "stack")
+
+```
+
+
+É possível perceber que a proporção de pacientes com pneumonia e sem não é igual para as duas classes. Temos uma porção maior de pacientes com pneumonia para a classe de paciente positivo (Y=1) em relação com a outra classe.
+
+
+
+- Boxplot de 'age' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+boxplot(split(dados$age,dados$covid_res),
+        main="Boxplot de gps para cada valor de covid_res",
+        xlab="age", ylab="Densidade",
+        col ='steelblue')
+```
+
+
+
+É possível ver que a idade aparenta possuir uma distribuição com valores mais altos para a classe de pacientes positivos para o covid (Y=1).
+
+
+- Gráfico de barras de 'pregnancy' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = pregnancy)) + 
+  geom_bar(position = "stack")
+
+```
+
+
+É possível perceber que apenas uma porção muito pequena das pacientes que realizaram o teste estavam grávidas, mas ainda sim, essa proporção é maior em relação a quando a pessoa não tem o vírus (Y=0).
+
+- Gráfico de barras de 'diabetes' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = diabetes)) + 
+  geom_bar(position = "stack")
+
+```
+
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes com diabetes é um pouco maior em relação á quando a pessoa tem o vírus (Y=1).
+
+- Gráfico de barras de 'copd' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = copd)) + 
+  geom_bar(position = "stack")
+
+```
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes com COPD é igual para ambas as classes.
+
+- Gráfico de barras de 'asthma' quando a pessoa tem ao vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = asthma)) + 
+  geom_bar(position = "stack")
+
+```
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes com asma é um pouco maior em relação á quando a pessoa tem o vírus (Y=1).
+
+- Gráfico de barras de 'inmsupr' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = inmsupr)) + 
+  geom_bar(position = "stack")
+
+```
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes imunossuprimidos é um pouco maior em relação á quando a pessoa não tem o vírus (Y=0).
+
+- Gráfico de barras de 'hypertension' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = hypertension)) + 
+  geom_bar(position = "stack")
+
+```
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes com hipertensão é maior em relação á quando a pessoa tem o vírus (Y=1).
+
+- Gráfico de barras de 'other_disease' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = other_disease)) + 
+  geom_bar(position = "stack")
+
+```
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes com outras doenças é maior em relação á quando a pessoa não tem o vírus (Y=0).
+
+
+- Gráfico de barras de 'cardiovascular' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = cardiovascular)) + 
+  geom_bar(position = "stack")
+
+```
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes com doenças cardiacas é igual para ambas as classes.
+
+- Gráfico de barras de 'obesity' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = obesity)) + 
+  geom_bar(position = "stack")
+
+```
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes obesos é maior em relação á quando a pessoa tem o vírus (Y=1).
+
+
+- Gráfico de barras de 'renal_chronic' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = renal_chronic)) + 
+  geom_bar(position = "stack")
+
+```
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes com doenças renais crônicas é igual para ambas as classes.
+
+
+
+
+- Gráfico de barras de 'tobacco' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = tobacco)) + 
+  geom_bar(position = "stack")
+
+```
+
+
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes que utilizam tabaco é igual para ambas as classes.
+
+
+- Gráfico de barras de 'contact_other_covid' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = contact_other_covid)) + 
+  geom_bar(position = "stack")
+
+```
+
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes que estiveram em contato com outras pessoas com covid é maior em relação á quando a pessoa tem o vírus (Y=1).
+
+
+- Gráfico de barras de 'icu' quando a pessoa tem o vírus (y=1) e não tem (y=0).
+```{r, out.width="60%"}
+
+ggplot(dados, 
+       aes(x = covid_res, 
+           fill = icu)) + 
+  geom_bar(position = "stack")
+
+```
+
+
+Percebemos pelo gráfico que aparentemente a proporção de pacientes que tiveram que ser enviados para UTI é maior em relação á quando a pessoa tem o vírus (Y=1).
+
+# b)Crie uma amostra de treino e teste seguindo a metodologia descrita no Notebook usando a base de dados principal criada no passo a).
+
+```{r}
+set.seed(10883512)
+ind <- sample(2,nrow(dados),replace = T,prob = c(0.8,0.2))
+
+training <- dados[ind==1,]
+test <- dados[ind==2,]
+
+
+table(test$covid_res)
+table(training$covid_res)
+
+
+#Colocando os índices novamente
+rownames(training)<-1:nrow(training)
+rownames(test)<-1:nrow(test)
+```
+
+
+
+# 4. Formulação do modelo
+
+Vamos considerar a função de ligação logito.
+
+- Componente aleatório: $y_1,...,y_{200}$ uma amostra aleatória $Y_i\sim Binomial(m_0,\theta_i)$
+
+- Componente sistemático: $\eta_i$
+
+- Função de ligação logit($\theta_i$) = $ln\left( \frac{\theta_i}{1-\theta_i}\right)$
+
+## Ajuste do modelo usando a função glm do R
+```{r}
+ajuste.log.1 <- glm(covid_res ~ .,
+                    family = binomial(link="logit"),data = training)
+
+summary(ajuste.log.1)
+```
+
+Considerando 5\% de nível de significância, observamos que, apenas as variáveis intubed, pregnancy, diabetes, asthma, hypertension, tobacco e icu não são significativas.
+
+Além disso, o resíduo está próximo ao ideal (-2,2), e o AIC desse ajuste é 1899.3.
+
+Lembrando que as covariáveis que possuem coeficiente de regressão positivo, indicam que quanto maior os valores dessas covariáveis, maior a chance de o paciente ser positivo para o vírus.
+
+
+### Intervalo de confiança
+```{r}
+(IC1 <- confint.default(ajuste.log.1, level=0.95))
+```
+Observamos que os intervalos de confiança dos coeficientes para estimar intubed, pregnancy, diabetes, asthma, hypertension, tobacco e icu contém o valor zero, o que confirma que essas covariáveis não são significativas.
+
+### Curva ROC
+```{r, out.width="70%"}
+ROC(ajuste.log.1$fitted.values, training$covid_res, plot= "ROC")
+```
+
+Obtivemos uma área abaixo da curva de 0.703, uma sensibilidade de 71.3% e uma especificidade de 59.7%.
+
+### Gráfico de envelope
+```{r}
+
+hnp.ajuste.log1 = hnp(ajuste.log.1, print.on=TRUE, plot=FALSE,
+halfnormal=F)
+plot(hnp.ajuste.log1,main="Modelo Logito",las=1,pch=20,cex=1,col=c(1,1,1,2))
+```
+
+O gráfico de envelope mostra que o modelo de regressão binária com a função de ligação logito faz um bom ajuste do modelo, pois apenas 2 pontos ficaram para fora do envelope.
+
+# 5. Proposta de modelos alternativos usando diferentes ligações.
+
+Vamos considerar outras funções de ligação para modelar os dados: probito, cauchito, cloglog e loglog.
+
+## Modelo utilizando a função de ligação probito
+
+Vamos considerar a função de ligação probito.
+
+- Componente aleatório: $y_1,...,y_{200}$ uma amostra aleatória $Y_i\sim Binomial(m_0,\theta_i)$
+
+- Componente sistemático: $\eta_i$
+
+- Função de ligação probit($\theta_i$) =  $\Phi^{-1}(\theta_i)$
+
+```{r}
+ajuste.probit.1 <- glm(covid_res  ~ . ,
+                    family = binomial(link="probit"),data = training)
+summary(ajuste.probit.1)
+```
+Considerando 5\% de nível de significância, observamos que, apenas as variáveis intubed, pregnancy, diabetes, asthma, hypertension, tobacco e icu não são significativas.
+
+Além disso, o resíduo está próximo ao ideal (-2,2), e o AIC desse ajuste é 1900.2.
+
+Lembrando que as covariáveis que possuem coeficiente de regressão positivo, indicam que quanto maior os valores dessas covariáveis, maior a chance de o paciente ser positivo para o vírus.
+
+### Intervalo de confiança
+```{r}
+(IC2 <- confint.default(ajuste.probit.1, level=0.95))
+```
+Observamos que os intervalos de confiança dos coeficientes para estimar intubed, pregnancy, diabetes, asthma, hypertension, tobacco e icu contém o valor zero, o que confirma que essas covariáveis não são significativas.
+
+### Curva ROC
+```{r, out.width="70%"}
+ROC(ajuste.probit.1$fitted.values, training$covid_res, plot= "ROC")
+```
+
+Obtivemos uma área abaixo da curva de 0.703, uma sensibilidade de 67.8% e uma especificidade de 63.2%.
+
+### Gráfico de envelope
+
+```{r}
+hnp.ajuste.probit = hnp(ajuste.probit.1, print.on=TRUE, plot=FALSE,
+halfnormal=F)
+plot(hnp.ajuste.probit,main="Modelo Probito",las=1,pch=20,cex=1,col=c(1,1,1,2))
+```
+
+O gráfico de envelope mostra que o modelo de regressão binária com a função de ligação probito faz um bom ajuste do modelo, pois nenhum ponto ficou para fora do envelope.
+
+## Modelo utilizando a função de ligação cauchito
+
+Vamos considerar a função de ligação cauchito.
+
+- Componente aleatório: $y_1,...,y_{200}$ uma amostra aleatória $Y_i\sim Binomial(m_0,\theta_i)$
+
+- Componente sistemático: $\eta_i$
+
+- Função de ligação cauchit($\theta_i$) =  $tg \left( \pi \left( \theta_i-\frac{1}{2} \right) \right)$
+
+```{r}
+ajuste.cauchit.1 <- glm(covid_res ~ .,
+                    family = binomial(link="cauchit"),data = training)
+summary(ajuste.cauchit.1)
+```
+Considerando 5\% de nível de significância, observamos que, apenas as variáveis intubed, pregnancy, diabetes, asthma, hypertension, tobacco e icu não são significativas.
+
+Além disso, o resíduo está próximo ao ideal (-2,2), e o AIC desse ajuste é 1895.5.
+
+Lembrando que as covariáveis que possuem coeficiente de regressão positivo, indicam que quanto maior os valores dessas covariáveis, maior a chance de o paciente ser positivo para o vírus.
+
+
+### Intervalo de confiança
+```{r}
+(IC3 <- confint.default(ajuste.cauchit.1, level=0.95))
+```
+Observamos que os intervalos de confiança dos coeficientes para estimar intubed, pregnancy, diabetes, asthma, hypertension, tobacco e icu contém o valor zero, o que confirma que essas covariáveis não são significativas.
+
+### Curva ROC
+```{r, out.width="70%"}
+ROC(ajuste.cauchit.1$fitted.values, training$covid_res, plot= "ROC")
+```
+
+Obtivemos uma área abaixo da curva de 0.704, uma sensibilidade de 73.1% e uma especificidade de 58.7%.
+
+### Gráfico de envelope
+```{r}
+hnp.ajuste.cauchito = hnp(ajuste.cauchit.1, print.on=TRUE, plot=FALSE,
+halfnormal=F)
+plot(hnp.ajuste.cauchito,main="Modelo Cauchito",las=1,pch=20,cex=1,col=c(1,1,1,2))
+```
+
+O gráfico de envelope mostra que o modelo de regressão binária com a função de ligação cauchito faz um bom ajuste do modelo, pois nenhum ponto ficou para fora do envelope.
+
+## Modelo utilizando a função de ligação cloglog
+
+Vamos considerar a função de ligação cloglog.
+
+- Componente aleatório: $y_1,...,y_{200}$ uma amostra aleatória $Y_i\sim Binomial(m_0,\theta_i)$
+
+- Componente sistemático: $\eta_i$
+
+- Função de ligação cloglog($\theta_i$) =  $log(-log(1-\theta_i))$
+
+```{r}
+ajuste.cloglog.1 <- glm(covid_res ~ .,
+                    family = binomial(link="cloglog"),data = training)
+summary(ajuste.cloglog.1)
+```
+
+Considerando 5\% de nível de significância, observamos que, apenas as variáveis intubed, pregnancy, diabetes, asthma, hypertension, tobacco e icu não são significativas.
+
+Além disso, o resíduo está próximo ao ideal (-2,2), e o AIC desse ajuste é 1904.7.
+
+Lembrando que as covariáveis que possuem coeficiente de regressão positivo, indicam que quanto maior os valores dessas covariáveis, maior a chance de o paciente ser positivo para o vírus.
+
+
+### Intervalo de confiança
+```{r}
+(IC4 <- confint.default(ajuste.cloglog.1, level=0.95))
+```
+
+Observamos que os intervalos de confiança dos coeficientes para estimar intubed, pregnancy, diabetes, asthma, hypertension e icu contém o valor zero, o que confirma que essas covariáveis não são significativas.
+
+
+### Curva ROC
+```{r, out.width="70%"}
+ROC(ajuste.cloglog.1$fitted.values, training$covid_res, plot= "ROC")
+```
+
+Obtivemos uma área abaixo da curva de 0.705, uma sensibilidade de 68.6% e uma especificidade de 62.8%.
+
+### Gráfico de envelope
+
+```{r}
+hnp.ajuste.cloglog = hnp(ajuste.cloglog.1, print.on=TRUE, plot=FALSE,halfnormal=F)
+plot(hnp.ajuste.cloglog,main="Modelo Cloglog",las=1,pch=20,cex=1,col=c(1,1,1,2))
+```
+
+O gráfico de controle mostra que o modelo de regressão binária com a função de ligação cloglog faz um bom ajuste do modelo, pois nenhum ponto ficou fora do envelope.
+
+## Modelo utilizando a função de ligação loglog
+Vamos considerar a função de ligação cauchito.
+
+- Componente aleatório: $y_1,...,y_{200}$ uma amostra aleatória $Y_i\sim Binomial(m_0,\theta_i)$
+
+- Componente sistemático: $\eta_i$
+
+- Função de ligação loglog($\theta_i$) =  $log(log(\theta_i))$
+
+```{r}
+loglog <- function( ) structure(list(
+  linkfun = function(mu) -log(-log(mu)),
+  linkinv = function(eta)
+    pmax(pmin(exp(-exp(-eta)), 1 - .Machine$double.eps), 
+         .Machine$double.eps),
+  mu.eta = function(eta) {
+    eta <- pmin(eta, 700)
+    pmax(exp(-eta - exp(-eta)), .Machine$double.eps)
+  },
+  dmu.deta = function(eta)
+    pmax(exp(-exp(-eta) - eta) * expm1(-eta), 
+         .Machine$double.eps),
+  valideta = function(eta) TRUE,
+  name = "loglog"
+), class = "link-glm")
+```
+
+
+
+```{r}
+ajuste.loglog.1 <- glm(covid_res~.,family = binomial(link = loglog()), data = training)
+
+summary(ajuste.loglog.1)
+```
+Considerando 5\% de nível de significância, observamos que, apenas as variáveis intubed, pregnancy, diabetes, asthma, hypertension, tobacco e icu não são significativas.
+
+Além disso, o resíduo está próximo ao ideal (-2,2), e o AIC desse ajuste é 1897.1.
+
+Lembrando que as covariáveis que possuem coeficiente de regressão positivo, indicam que quanto maior os valores dessas covariáveis, maior a chance de o paciente ser positivo para o vírus.
+
+
+### Intervalo de confiança
+```{r}
+(IC5 <- confint.default(ajuste.loglog.1, level=0.95))
+```
+Observamos que os intervalos de confiança dos coeficientes para estimar intubed, pregnancy, diabetes, asthma, hypertension e icu contém o valor zero, o que confirma que essas covariáveis não são significativas.
+
+
+### Curva ROC
+```{r, out.width="70%"}
+ROC(ajuste.loglog.1$fitted.values, training$covid_res, plot= "ROC")
+```
+
+Obtivemos uma área abaixo da curva de 0.70, uma sensibilidade de 74.9% e uma especificidade de 55.7%.
+
+
+## Conclusão sobre os diferentes modelos propostos
+
+Percebemos que as análises de cada ajuste utilizando as diferentes funções de ligação foram bem semelhantes, em todas funções de ligação, as mesmas variáveis deram significativas.
+
+Em relação aos resíduos, aos valores de AIC e as curvas ROC, os modelos também apresentaram resultados muito semelhantes. Mas mesmo assim iremos analisar estas diferenças (mesmo que sejam pequenas) e determinar o melhor modelo baseado nelas.
+
+| Função de ligação | Área abaixo da curva ROC | Sensibilidade (%) | Especificidade (%) | AIC    |
+|-------------------|--------------------------|-------------------|--------------------|--------|
+| logito            | 0.703                    | 71.3              | 59.7                 | 1899.3 |
+| probito           | 0.703                    |  67.8              | 63.2               | 1900.2 |
+| cauchito          | 0.704                    | 73.1              | 58.7               | 1895.5  |
+| cloglog           | 0.705                    | 68.6              | 62.8               | 1904.7 |
+| loglog            | 0.70                    | 74.9              | 55.7               | 1897.1 |
+
+
+Portanto, escolhemos o modelo de regressão binária com ligação **cauchito** por ele ser o que possui o menor AIC dentre todos os outros modelos.
+
+Portanto, o modelo estimado  escolhido para predizer se o paciente é positivo para covid é dado por:
+
+
+
+# 6. Análise de seleção de variáveis do modelo.
+
+Para o modelo escolhido, vamos fazer uma análise de seleção de variáveis utilizando a função do R stepAIC, que nos ajuda a detectar os melhores preditores.
+
+```{r}
+stepAIC(ajuste.cauchit.1)
+```
+
+Com a saída dessa função, o modelo que possui o menor AIC é o modelo que possui paenas as variáveis explicativas sex, pneumonia, age, copd, inmsupr, other_disease, cardiovascular, obesity, renal_chronic e contact_other_covid.
+
+Portanto, nosso novo modelo é dado por
+
+```{r}
+ajuste.cauchit.2 <- glm(formula = covid_res ~ sex + pneumonia + age + copd + inmsupr + 
+    other_disease + cardiovascular + obesity + renal_chronic + 
+    contact_other_covid, family = binomial(link = "cauchit"), 
+    data = training)
+summary(ajuste.cauchit.2)
+```
+
+
+# 7. Análise Diagnóstica para identificar pontos problemáticos.
+
+Agora, vamos fazer uma análise diagnóstica para identificar pontos problemáticos do modelo reduzido.
+
+Para isso, vamos utilizar a função InfluenceIndexPlot do pacote car no R.
+
+A figura a seguir apresenta diferentes quantidades calculadas para cada uma das observações usando medidas de diagnóstico de pontos influentes usualmente apresentadas nos modelos lineares generalizados. A quantidade "Cook" corresponde a distância de Cook (para detectar pontos influentes), "Studentized" corresponde aos resíduos stutentizados (para detectar homocedasticidade), "Bonf" corresponde aos valores p do teste Bonferroni para outliers e , por fim, "hat" para os valores-hat values (ou pontos de alavanca).
+
+```{r, out.width="0%"}
+require(car)
+influenceIndexPlot(ajuste.cauchit.2)
+```
+
+Pela figura, verificamos alguns possíveis pontos de alavanca.
+
+Para identificar quais são os pontos influentes dentres os apresentados nos 4 gráficos anteriores, utilizamos a função Influenceplot:
+
+```{r}
+influencePlot(ajuste.cauchit.2)
+```
+
+Considerando os valores dos resíduos studentizados, percebemos que o ponto 723 se encontra fora do intervalo (-2,2).
+
+Para identificar os pontos influentes, é preciso encontrar aqueles cujo valor de hat $\hat{h} > 2\frac{p}{n}=2\frac{10}{1575}=0.0127$, em que $p$ representa o número de coeficientes de regressão e $n$ é o número de observações. Neste caso, foram detectadas as observações  173, 269 e 546 como pontos de alavanca.
+
+A figura que mostra as observações segundo os resíduos studentizados e valor h, mostra também círculos proporcionais ao valor da distância de Cook. Neste caso, detectamos que as observações 173 e 269 são pontos influentes.
+
+Levando em consideração os pontos que têm mais de uma indicação problemática, nós identificamos os pontos 173 e 269 como pontos que requerem uma análise mais detalhada.
+
+
+## Retirando ponto a ponto
+
+- Retirando o ponto 173
+```{r}
+ajuste.cauchit.3 <- glm(formula = covid_res ~ sex + pneumonia + age + copd + inmsupr + 
+    other_disease + cardiovascular + obesity + renal_chronic + 
+    contact_other_covid, family = binomial(link = "cauchit"), 
+    data = training,subset=-c(173))
+```
+
+- Retirando o ponto 269
+```{r}
+ajuste.cauchit.4 <- glm(formula = covid_res ~ sex + pneumonia + age + copd + inmsupr + 
+    other_disease + cardiovascular + obesity + renal_chronic + 
+    contact_other_covid, family = binomial(link = "cauchit"), 
+    data = training,subset=-c(269))
+```
+
+## Retirando de dois em dois
+
+- Retirando os pontos 173 e 269
+```{r}
+ajuste.cauchit.5 <- glm(formula = covid_res ~ sex + pneumonia + age + copd + inmsupr + 
+    other_disease + cardiovascular + obesity + renal_chronic + 
+    contact_other_covid, family = binomial(link = "cauchit"), 
+    data = training,subset=-c(173,269))
+```
+
+## Comparando os modelos retirando os pontos influentes
+
+Vamos comparar os coeficientes de todos os modelos acima, baseados na retirada de pontos e no modelo que não foram retirados pontos.
+
+```{r}
+compareCoefs(ajuste.cauchit.2, ajuste.cauchit.3, ajuste.cauchit.4,
+             ajuste.cauchit.5)
+```
+
+Conseguimos perceber que os coeficientes de regressão dos modelos propostos, quando se retiraram os pontos identificados na análise de diagnóstico não mudaram em relação ao modelo com todos os pontos (ajuste.cauchit.2), porém, as interpretações são mantidas.
+
+## Comparando o AIC dos modelos com retiradas dos pontos
+
+Vamos analisar os valores de AIC de cada modelo.
+
+```{r}
+data.frame(
+  Modelo= c("Completo", "Removendo 173", "Removendo 269","Removendo 173 e 269"),
+  AIC = c(AIC(ajuste.cauchit.2),AIC(ajuste.cauchit.3),AIC(ajuste.cauchit.4),
+          AIC(ajuste.cauchit.5)))
+```
+
+Ao comparar os AICs, observamos que sempre que removemos algum ponto detectado na análise diagnóstico, obtemos um menor AIC, indicando um melhor modelo. Nós detectamos que o modelo com menor AIC é aquele que retira todos os dois pontos influentes. O AIC do modelo com todos os pontos é 1884.334 e o AIC do modelo removendo os três pontos influentes é 1879.683.
+
+Como a retirada dos pontos é uma questão delicada, não podemos retirar os pontos sem antes conhecer afundo o problema e sem a devida permissão do pesquisador. Então, podemos sugerir dois modelos, o com os dados completos e um alternativo retirando os pontos 173 e 269.
+
+# 8. Modelo final
+
+```{r}
+summary(ajuste.cauchit.5)
+```
+
+# 9. Avaliação do modelo final
+
+O modelo final escolhido é o de regressão binária que usa a função de ligação cauchito, considerando apenas as variáveis explicativas sex, pneumonia, age, copd, inmsupr, other_disease, cardiovascular, obesity, renal_chronic e contact_other_covid e retirando os pontos 173 e 269.
+
+O AIC desse modelo é 1879.7, menor dentre os outros modelos propostos.
+
+A curva ROC desse modelo é dada por:
+
+```{r, out.width="70%"}
+newtraining <- training[-c(173,269),]#removendo os pontos
+
+ROC(ajuste.cauchit.5$fitted.values, newtraining$covid_res, plot= "ROC")
+
+```
+
+
+
+
+
+O gráfico de envelope desse modelo é o seguinte:
+```{r}
+hnp.ajuste.cauchit.5 = hnp(ajuste.cauchit.5, print.on=TRUE, plot=FALSE,
+halfnormal=F)
+plot(hnp.ajuste.cauchit.5,main="Modelo Final",las=1,pch=20,cex=1,col=c(1,1,1,2))
+```
+
+O modelo final escolhido parece ajustar muito bem aos dados, pois nenhum ponto ficou fora do envelope.
+
+#Calculando a acurácia com o modelo final utilizando o ponto de corte ótimo dado pela curva ROC (conjunto de teste)
+
+```{r}
+probabilities <- predict(ajuste.cauchit.5,test,type = "response")
+predicted.classes <- ifelse(probabilities > 0.641 ,"1", "0")
+
+require(caret)
+confusionMatrix(factor(predicted.classes),factor(test$covid_res),positive = '1')
+
+```
+
+Podemos perceber que a acurácia do modelo deu abaixo de 0.659, isso pode ter ocorrido pois estamos utilizando o ponto de corte ótimo que visa balancear sensitividade e especificidade. Poderiamos tentar aumentar essa acurácia também utilizando outros metodos de 'feature selection'. E a acurácia irá depender também do conjunto de teste que foi selecionado. Tendo isso em vista, para uma análise melhor da acurácia e de outras métricas, poderiamos validar o modelo utilizando validação cruzada estratificada aninhada, mas não será feito aqui. Temos também o fato de que a amostra de 2000 retirada dos dados originais impacta muito nisso.
+
+# Calculando a acurácia com o modelo logístico utilizando o ponto de corte ótimo dado pela curva ROC (conjunto de teste)
+
+```{r}
+probabilities <- predict(ajuste.log.1,test,type = "response")
+predicted.classes <- ifelse(probabilities > 0.629 ,"1", "0")
+
+require(caret)
+confusionMatrix(factor(predicted.classes),factor(test$covid_res),positive = '1')
+
+```
+Utilizando o valor ótimo de corte dado pelo gráfico da curva ROC da função logística, obtemos que em relação a acurácia, o modelo logístico se igual ao modelo cauchito antes escolhido(0.6282 de acurácia ).
+
+
+
+\newpage
+# 10. Conclusão
+
+Concluímos que o modelo mais parcimonioso para os dados da amostra é o que utiliza função de ligação cauchito, e só considera as variáveis sex, pneumonia, age, copd, inmsupr, other_disease, cardiovascular, obesity, renal_chronic, contact_other_covid e retira os pontos influentes 173 e 269.
+
+
+No entanto, é importante salientar que a retirada de pontos é delicada, portanto, é necessário consultar o pesquisador e entender bem sobre o contexto da situação que está sendo analisada.
+
+Assim, ao propor o modelo, é interessante que haja outras alternativas de retirada de pontos (um a um ou dois a dois), como foi visto anteriormente. Dessa forma, podemos modelar sem perder informações julgadas pelo pesquisador como importantes.
+
+# 11. Referências
+
+- Bazán, J. (2020). Análise de Dados Categorizados com auxílio computacional. Capítulo 4.
+Regressão dicotômica.
+
+
+
